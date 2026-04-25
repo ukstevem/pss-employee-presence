@@ -1,0 +1,150 @@
+/* @platform/ui - PSS brand styles */
+/* Import this AFTER tailwindcss in each app's globals.css */
+
+/* ── PSS Brand Colours ──────────────────────────────── */
+/*
+ * Navy (primary):  #061b37  RGB(6, 27, 55)
+ * Sky (secondary): #97caeb  RGB(151, 202, 235)
+ *
+ * Derived tints/shades:
+ * Navy-light:      #0c2d5a  (hover states, lighter navy)
+ * Navy-dark:       #041224  (darkest, text on light backgrounds)
+ * Sky-light:       #d0e8f7  (light backgrounds, subtle highlights)
+ * Sky-pale:        #e8f3fb  (page backgrounds)
+ */
+
+:root {
+  --pss-navy:       #061b37;
+  --pss-navy-light: #0c2d5a;
+  --pss-navy-dark:  #041224;
+  --pss-sky:        #97caeb;
+  --pss-sky-light:  #d0e8f7;
+  --pss-sky-pale:   #e8f3fb;
+  --pss-white:      #ffffff;
+}
+
+/* ── Base resets ─────────────────────────────────────── */
+body {
+  font-family: "Montserrat", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  background: var(--pss-sky-pale);
+  color: var(--pss-navy);
+  margin: 0;
+}
+
+/* ── PSS branded elements ────────────────────────────── */
+
+/* Sidebar / nav backgrounds */
+.pss-sidebar {
+  background: var(--pss-navy);
+  color: var(--pss-white);
+}
+.pss-sidebar a {
+  color: var(--pss-sky-light);
+  text-decoration: none;
+}
+.pss-sidebar a:hover {
+  color: var(--pss-white);
+  background: var(--pss-navy-light);
+}
+
+/* Primary buttons */
+.pss-btn {
+  background: var(--pss-navy);
+  color: var(--pss-white);
+  border: none;
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.pss-btn:hover {
+  background: var(--pss-navy-light);
+}
+.pss-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Secondary / outline buttons */
+.pss-btn-outline {
+  background: var(--pss-white);
+  color: var(--pss-navy);
+  border: 1px solid var(--pss-navy);
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.pss-btn-outline:hover {
+  background: var(--pss-sky-pale);
+}
+
+/* Active toggle state */
+.pss-toggle-active {
+  background: var(--pss-navy) !important;
+  color: var(--pss-white) !important;
+  border-color: var(--pss-navy) !important;
+}
+
+/* Page header accent bar */
+.pss-accent-bar {
+  height: 3px;
+  background: var(--pss-sky);
+  border: none;
+  margin: 0;
+}
+
+/* ── Loading spinner ─────────────────────────────────── */
+@keyframes platform-spin {
+  to { transform: rotate(360deg); }
+}
+.platform-spinner {
+  display: inline-block;
+  width: 1.25rem;
+  height: 1.25rem;
+  border: 2px solid var(--pss-sky-light);
+  border-top-color: var(--pss-navy);
+  border-radius: 9999px;
+  animation: platform-spin 0.6s linear infinite;
+}
+.platform-spinner-lg {
+  width: 2rem;
+  height: 2rem;
+  border-width: 3px;
+}
+
+/* ── Status badges ───────────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 9999px;
+  border: 1px solid;
+  font-size: 0.625rem;
+  font-weight: 500;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.badge-green  { background: #f0fdf4; border-color: #22c55e; color: #15803d; }
+.badge-yellow { background: #fefce8; border-color: #eab308; color: #a16207; }
+.badge-orange { background: #fff7ed; border-color: #f97316; color: #c2410c; }
+.badge-blue   { background: var(--pss-sky-pale); border-color: var(--pss-sky); color: var(--pss-navy); }
+.badge-red    { background: #fef2f2; border-color: #ef4444; color: #b91c1c; }
+.badge-gray   { background: #f9fafb; border-color: #9ca3af; color: #4b5563; }
+
+/* ── Toast / alert bar ───────────────────────────────── */
+.alert {
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.alert-error   { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+.alert-success { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+.alert-info    { background: var(--pss-sky-pale); color: var(--pss-navy); border: 1px solid var(--pss-sky-light); }

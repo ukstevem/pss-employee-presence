@@ -1,0 +1,22 @@
+services:
+  employee-presence:
+    image: ghcr.io/ukstevem/pss-employee-presence:${IMAGE_TAG:-latest}
+    container_name: employee-presence
+    restart: unless-stopped
+    env_file:
+      - ../platform-portal/.env
+    environment:
+      - PORT=3011
+    ports:
+      - "3011:3011"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3011/employee-presence/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+networks:
+  default:
+    name: platform_net
+    external: true
