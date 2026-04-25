@@ -2,6 +2,7 @@ import "./globals.css";
 import type { Metadata } from "next";
 import { Montserrat } from "next/font/google";
 import { AuthProvider } from "@platform/auth";
+import { AppSidebar } from "@/components/AppSidebar";
 import { ReactNode } from "react";
 
 const montserrat = Montserrat({
@@ -20,7 +21,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="en" className={montserrat.variable}>
       <body style={{ fontFamily: "var(--font-montserrat), 'Montserrat', system-ui, sans-serif" }}>
         <AuthProvider>
-          <main className="min-h-screen">{children}</main>
+          <div className="flex min-h-screen">
+            <AppSidebar />
+            <main className="flex-1 min-w-0">{children}</main>
+          </div>
         </AuthProvider>
       </body>
     </html>
