@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "pss_employee_presence",
+  "project_id": "b264dd3b-15ed-40bd-b951-0ecb34d29155"
+}
