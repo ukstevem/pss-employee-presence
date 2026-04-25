@@ -9,7 +9,7 @@
 -- ============================================================
 
 create or replace view employees_whos_in_now
-with (security_invoker = on)
+with (security_invoker = off)
 as
 with todays_taps as (
   select
@@ -49,6 +49,8 @@ from employees emp
 left join agg on agg.employee_id = emp.id
 where emp.active = true;
 
--- security_invoker = on means the view runs with the caller's privileges,
--- so RLS on employee_cards / timecard_events / employees applies normally.
--- (Default in PG ≤14 was security definer, which would silently bypass RLS.)
+-- security_invoker = off (definer mode): the view runs with its
+-- OWNER's privileges, bypassing the service_role_only RLS policy
+-- on timecard_events. The view returns only aggregated/derived
+-- presence data, so this is a controlled read surface — the raw
+-- event rows stay inaccessible to authenticated users.

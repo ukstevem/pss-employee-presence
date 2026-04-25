@@ -37,7 +37,7 @@ returns table (
   late_minutes         int,    -- positive = arrived after shift start; negative = early
   early_finish_minutes int     -- positive = left before shift end; negative = stayed late
 )
-language sql stable as $$
+language sql stable security definer as $$
   with ordered_taps as (
     select
       tc.employee_id,
@@ -110,5 +110,11 @@ language sql stable as $$
   cross join date_range dr
   left join daily  d on d.employee_id  = e.id and d.work_date  = dr.d
   left join worked w on w.employee_id  = e.id and w.work_date  = dr.d
-  where e.active = true;
+  -- Temporal overlap: employee was hired by the end of the range AND
+  -- was still here (or hadn't yet left) at the start of the range.
+  -- hire_date IS NULL is treated as "always" (don't filter), so newly
+  -- added rows without a hire_date set still appear.
+  where (e.hire_date is null or e.hire_date <= p_end_date)
+    and (e.deactivated_at is null
+         or e.deactivated_at::date >= p_start_date);
 $$;
