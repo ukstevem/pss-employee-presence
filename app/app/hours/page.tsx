@@ -4,12 +4,14 @@ import { useAuth, AuthButton } from "@platform/auth";
 import { Spinner, EmptyState } from "@platform/ui";
 import { supabase } from "@platform/supabase";
 import { useEffect, useState, useCallback, useMemo, Fragment } from "react";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { SHIFT_TIMEZONE } from "@/lib/shift";
 
 type DailyHoursRow = {
   employee_id: string;
   full_name: string;
   team: string;
+  pay_type: "hourly" | "salaried";
   work_date: string; // 'YYYY-MM-DD'
   is_working_day: boolean;
   tap_count: number;
@@ -29,9 +31,9 @@ function isoDate(d: Date): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-// Monday of the week containing `d`, in runtime-local TZ. Used for the
-// date-range default; not load-bearing for SQL correctness (the function
-// re-anchors to Europe/London).
+// Date helpers used for the range presets. All operate in the runtime's
+// local timezone — not load-bearing for SQL correctness, since the
+// function re-anchors to Europe/London at evaluation time.
 function startOfWeek(d: Date): Date {
   const out = new Date(d);
   const day = out.getDay(); // 0=Sun..6=Sat
@@ -39,6 +41,26 @@ function startOfWeek(d: Date): Date {
   out.setDate(out.getDate() + offset);
   out.setHours(0, 0, 0, 0);
   return out;
+}
+
+function endOfWeek(d: Date): Date {
+  const out = startOfWeek(d);
+  out.setDate(out.getDate() + 6);
+  return out;
+}
+
+function shiftDays(d: Date, n: number): Date {
+  const out = new Date(d);
+  out.setDate(out.getDate() + n);
+  return out;
+}
+
+function startOfMonth(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+function endOfMonth(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0);
 }
 
 function formatTime(ts: string | null): string {
@@ -94,16 +116,69 @@ function Badge({
 
 export default function HoursPage() {
   const { user, loading: authLoading } = useAuth();
-  const today = useMemo(() => new Date(), []);
-  const [startDate, setStartDate] = useState(isoDate(startOfWeek(today)));
-  const [endDate, setEndDate] = useState(isoDate(today));
-  const [teamFilter, setTeamFilter] = useState<string>("all");
-  const [showWeekends, setShowWeekends] = useState(false);
-  const [hideQuiet, setHideQuiet] = useState(true);
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  const [startDate, setStartDate] = useState(
+    () =>
+      searchParams.get("from") ?? isoDate(startOfWeek(new Date()))
+  );
+  const [endDate, setEndDate] = useState(
+    () => searchParams.get("to") ?? isoDate(endOfWeek(new Date()))
+  );
+  const [teamFilter, setTeamFilter] = useState<string>(
+    () => searchParams.get("team") ?? "all"
+  );
+  const [showWeekends, setShowWeekends] = useState(
+    () => searchParams.get("weekends") === "1"
+  );
+  const [hideQuiet, setHideQuiet] = useState(
+    () => searchParams.get("quiet") !== "0"
+  );
+  const [includeSalaried, setIncludeSalaried] = useState(
+    () => searchParams.get("include_salaried") === "1"
+  );
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [rows, setRows] = useState<DailyHoursRow[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Mirror state -> URL so refresh + share both work.
+  useEffect(() => {
+    const sp = new URLSearchParams();
+    sp.set("from", startDate);
+    sp.set("to", endDate);
+    if (teamFilter !== "all") sp.set("team", teamFilter);
+    if (showWeekends) sp.set("weekends", "1");
+    if (!hideQuiet) sp.set("quiet", "0");
+    if (includeSalaried) sp.set("include_salaried", "1");
+    router.replace(`${pathname}?${sp.toString()}`, { scroll: false });
+  }, [
+    startDate,
+    endDate,
+    teamFilter,
+    showWeekends,
+    hideQuiet,
+    includeSalaried,
+    router,
+    pathname,
+  ]);
+
+  function applyPreset(name: "this-week" | "last-week" | "this-month") {
+    const today = new Date();
+    if (name === "this-week") {
+      setStartDate(isoDate(startOfWeek(today)));
+      setEndDate(isoDate(endOfWeek(today)));
+    } else if (name === "last-week") {
+      const lastWeekRef = shiftDays(today, -7);
+      setStartDate(isoDate(startOfWeek(lastWeekRef)));
+      setEndDate(isoDate(endOfWeek(lastWeekRef)));
+    } else {
+      setStartDate(isoDate(startOfMonth(today)));
+      setEndDate(isoDate(endOfMonth(today)));
+    }
+  }
 
   const refresh = useCallback(async () => {
     if (!user) return;
@@ -131,13 +206,14 @@ export default function HoursPage() {
     return rows
       .filter((r) => showWeekends || r.is_working_day)
       .filter((r) => teamFilter === "all" || r.team === teamFilter)
+      .filter((r) => includeSalaried || r.pay_type === "hourly")
       .sort((a, b) => {
         if (a.work_date !== b.work_date) {
           return a.work_date < b.work_date ? -1 : 1;
         }
         return a.full_name.localeCompare(b.full_name);
       });
-  }, [rows, showWeekends, teamFilter]);
+  }, [rows, showWeekends, teamFilter, includeSalaried]);
 
   const teams = useMemo(() => {
     if (!rows) return [];
@@ -196,7 +272,12 @@ export default function HoursPage() {
       if (r.late_minutes !== null && r.late_minutes > 0) s.late_count += 1;
     }
     return [...map.values()].sort((a, b) => {
-      // Employees with activity float to the top
+      // Anomalies float to the top — that's the whole point of the
+      // page when issues need addressing.
+      const aAnoms = a.missed_in + a.missed_out + a.late_count;
+      const bAnoms = b.missed_in + b.missed_out + b.late_count;
+      if (aAnoms !== bAnoms) return bAnoms - aAnoms;
+      // Then employees with any activity above quiet ones
       const aActive = a.total_minutes > 0 || a.days_worked > 0 ? 1 : 0;
       const bActive = b.total_minutes > 0 || b.days_worked > 0 ? 1 : 0;
       if (aActive !== bActive) return bActive - aActive;
@@ -235,44 +316,77 @@ export default function HoursPage() {
     <div className="p-6 max-w-6xl mx-auto space-y-6 bg-gray-50 min-h-screen">
       <h1 className="text-2xl font-bold text-gray-800">Hours Analysis</h1>
 
-      <div className="flex flex-wrap items-end gap-4 bg-white p-4 rounded-lg border border-gray-100 shadow-sm">
-        <label className="flex flex-col text-xs text-gray-500">
-          From
-          <input
-            type="date"
-            value={startDate}
-            max={endDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="mt-1 border rounded px-2 py-1 text-sm"
-          />
-        </label>
-        <label className="flex flex-col text-xs text-gray-500">
-          To
-          <input
-            type="date"
-            value={endDate}
-            min={startDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            className="mt-1 border rounded px-2 py-1 text-sm"
-          />
-        </label>
-        <label className="flex flex-col text-xs text-gray-500">
-          Team
-          <select
-            value={teamFilter}
-            onChange={(e) => setTeamFilter(e.target.value)}
-            className="mt-1 border rounded px-2 py-1 text-sm bg-white"
-          >
-            <option value="all">All teams</option>
-            {teams.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="flex items-center gap-4 ml-auto">
-          <label className="flex items-center gap-2 text-sm text-gray-600">
+      <div className="bg-white p-4 rounded-lg border border-gray-100 shadow-sm space-y-3">
+        <div className="flex flex-wrap items-end gap-4">
+          <label className="flex flex-col text-xs text-gray-500">
+            From
+            <input
+              type="date"
+              value={startDate}
+              max={endDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="mt-1 border rounded px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="flex flex-col text-xs text-gray-500">
+            To
+            <input
+              type="date"
+              value={endDate}
+              min={startDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="mt-1 border rounded px-2 py-1 text-sm"
+            />
+          </label>
+          <div className="flex items-end gap-1 pb-0.5">
+            <button
+              type="button"
+              onClick={() => applyPreset("this-week")}
+              className="px-2.5 py-1 text-xs rounded border border-gray-200 hover:bg-gray-50"
+            >
+              This week
+            </button>
+            <button
+              type="button"
+              onClick={() => applyPreset("last-week")}
+              className="px-2.5 py-1 text-xs rounded border border-gray-200 hover:bg-gray-50"
+            >
+              Last week
+            </button>
+            <button
+              type="button"
+              onClick={() => applyPreset("this-month")}
+              className="px-2.5 py-1 text-xs rounded border border-gray-200 hover:bg-gray-50"
+            >
+              This month
+            </button>
+          </div>
+          <label className="flex flex-col text-xs text-gray-500">
+            Team
+            <select
+              value={teamFilter}
+              onChange={(e) => setTeamFilter(e.target.value)}
+              className="mt-1 border rounded px-2 py-1 text-sm bg-white"
+            >
+              <option value="all">All teams</option>
+              {teams.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600 border-t border-gray-100 pt-3">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={includeSalaried}
+              onChange={(e) => setIncludeSalaried(e.target.checked)}
+            />
+            Include salaried
+          </label>
+          <label className="flex items-center gap-2">
             <input
               type="checkbox"
               checked={hideQuiet}
@@ -280,7 +394,7 @@ export default function HoursPage() {
             />
             Hide employees with no taps
           </label>
-          <label className="flex items-center gap-2 text-sm text-gray-600">
+          <label className="flex items-center gap-2">
             <input
               type="checkbox"
               checked={showWeekends}

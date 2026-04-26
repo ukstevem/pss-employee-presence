@@ -13,7 +13,9 @@
 -- Run after 009_employee_shift_pattern.sql.
 -- ============================================================
 
-create or replace function employees_daily_hours(
+drop function if exists employees_daily_hours(date, date, text, time, time);
+
+create function employees_daily_hours(
   p_start_date  date,
   p_end_date    date,
   p_timezone    text default 'Europe/London',
@@ -24,6 +26,7 @@ returns table (
   employee_id          uuid,
   full_name            text,
   team                 text,
+  pay_type             text,
   work_date            date,
   is_working_day       boolean,
   tap_count            int,
@@ -49,6 +52,7 @@ language sql stable security definer as $$
       e.id                                          as employee_id,
       e.first_name || ' ' || e.last_name            as full_name,
       e.team,
+      e.pay_type,
       dr.d                                          as work_date,
       coalesce(spd.day_start, p_shift_start)        as day_start,
       coalesce(spd.day_finish, p_shift_end)         as day_finish,
@@ -144,6 +148,7 @@ language sql stable security definer as $$
     sr.employee_id,
     sr.full_name,
     sr.team,
+    sr.pay_type,
     sr.work_date,
     sr.is_working_day,
     coalesce(d.tap_count, 0)              as tap_count,
