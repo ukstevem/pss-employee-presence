@@ -21,6 +21,7 @@ export function AppSidebar() {
           heading: "Admin",
           items: [
             { label: "Cards", href: "/employee-presence/admin/cards/" },
+            { label: "Shift Patterns", href: "/employee-presence/admin/shifts/" },
           ],
         },
       ]}
