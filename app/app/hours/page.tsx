@@ -17,6 +17,8 @@ type DailyHoursRow = {
   tap_count: number;
   first_tap: string | null;
   last_tap: string | null;
+  first_tap_actor: string | null;
+  last_tap_actor: string | null;
   worked_minutes: number;
   missed_clock_in: boolean;
   missed_clock_out: boolean;
@@ -87,6 +89,30 @@ function formatHours(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return `${h}h ${String(m).padStart(2, "0")}m`;
+}
+
+function TapCell({
+  actual,
+  actor,
+}: {
+  actual: string | null;
+  actor: string | null;
+}) {
+  if (!actual) return <span>—</span>;
+  const isManual = actor === "admin";
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span>{formatTime(actual)}</span>
+      {isManual && (
+        <span
+          title="Manually entered by an admin"
+          className="text-[0.6rem] font-bold uppercase text-amber-700 bg-amber-100 border border-amber-200 rounded px-1 leading-none py-px"
+        >
+          M
+        </span>
+      )}
+    </span>
+  );
 }
 
 function Badge({
@@ -515,10 +541,10 @@ export default function HoursPage() {
                                       {r.tap_count}
                                     </td>
                                     <td className="py-1 pr-3 text-gray-600">
-                                      {formatTime(r.first_tap)}
+                                      <TapCell actual={r.first_tap} actor={r.first_tap_actor} />
                                     </td>
                                     <td className="py-1 pr-3 text-gray-600">
-                                      {formatTime(r.last_tap)}
+                                      <TapCell actual={r.last_tap} actor={r.last_tap_actor} />
                                     </td>
                                     <td className="py-1 pr-3 text-right text-gray-700">
                                       {formatHours(r.worked_minutes)}

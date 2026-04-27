@@ -32,6 +32,8 @@ returns table (
   tap_count            int,
   first_tap            timestamptz,
   last_tap             timestamptz,
+  first_tap_actor      text,
+  last_tap_actor       text,
   worked_minutes       int,
   missed_clock_in      boolean,
   missed_clock_out     boolean,
@@ -76,6 +78,7 @@ language sql stable security definer as $$
     select
       tc.employee_id,
       e.ts,
+      e.actor,
       (e.ts at time zone p_timezone)::date as work_date,
       row_number() over (
         partition by tc.employee_id, (e.ts at time zone p_timezone)::date
@@ -102,7 +105,11 @@ language sql stable security definer as $$
       work_date,
       count(*)::int as tap_count,
       min(ts)       as first_tap,
-      max(ts)       as last_tap
+      max(ts)       as last_tap,
+      -- actor of the chronologically-first / last tap, so the page can
+      -- show an "M" telltale next to manually-entered ones (actor='admin')
+      (array_agg(actor order by ts asc))[1]  as first_tap_actor,
+      (array_agg(actor order by ts desc))[1] as last_tap_actor
     from ordered_taps
     group by employee_id, work_date
   ),
@@ -154,6 +161,8 @@ language sql stable security definer as $$
     coalesce(d.tap_count, 0)              as tap_count,
     d.first_tap,
     d.last_tap,
+    d.first_tap_actor,
+    d.last_tap_actor,
     coalesce(w.worked_minutes, 0)         as worked_minutes,
     (d.tap_count is null)                 as missed_clock_in,
     (d.tap_count is not null and d.tap_count % 2 = 1) as missed_clock_out,
