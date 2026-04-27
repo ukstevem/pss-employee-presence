@@ -3,10 +3,24 @@ services:
     image: ghcr.io/ukstevem/pss-employee-presence:${IMAGE_TAG:-latest}
     container_name: employee-presence
     restart: unless-stopped
-    env_file:
-      - ../platform-portal/.env
+    # Portainer Stack > Environment variables (or shell `export` for
+    # local docker compose). Five vars required at runtime:
+    #   NEXT_PUBLIC_SUPABASE_URL
+    #   NEXT_PUBLIC_SUPABASE_ANON_KEY
+    #   NEXT_PUBLIC_APP_URL
+    #   SUPABASE_URL
+    #   SUPABASE_SECRET_KEY
+    # The NEXT_PUBLIC_* values are also baked into the client bundle
+    # at build time (from platform-portal/.env when ./build.sh ran);
+    # passing them again at runtime is harmless and lets server-side
+    # code that imports @platform/supabase work too.
     environment:
-      - PORT=3011
+      PORT: 3011
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY}
     ports:
       - "3011:3011"
     healthcheck:
