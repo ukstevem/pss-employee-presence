@@ -3,7 +3,7 @@
 import { useAuth, AuthButton } from "@platform/auth";
 import { Spinner, EmptyState } from "@platform/ui";
 import { supabase } from "@platform/supabase";
-import { useEffect, useState, useCallback, useMemo, Fragment } from "react";
+import { useEffect, useState, useCallback, useMemo, Fragment, Suspense } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { SHIFT_TIMEZONE } from "@/lib/shift";
 
@@ -143,6 +143,24 @@ function Badge({
 }
 
 export default function HoursPage() {
+  // useSearchParams in HoursPageInner needs a Suspense boundary so the
+  // production build can prerender without bailing to CSR. The whole
+  // page is dynamic anyway (Supabase + auth), so the fallback rarely
+  // shows in practice — it's just there to satisfy Next's contract.
+  return (
+    <Suspense
+      fallback={
+        <div className="p-6 flex items-center justify-center min-h-[60vh]">
+          <Spinner />
+        </div>
+      }
+    >
+      <HoursPageInner />
+    </Suspense>
+  );
+}
+
+function HoursPageInner() {
   const { user, loading: authLoading } = useAuth();
   const searchParams = useSearchParams();
   const router = useRouter();

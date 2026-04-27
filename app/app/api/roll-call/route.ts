@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase-admin";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +15,7 @@ type WhosInRow = {
 };
 
 export async function GET() {
-  const { data, error } = await supabaseAdmin
+  const { data, error } = await getSupabaseAdmin()
     .from("employees_whos_in_now")
     .select(
       "employee_id, full_name, first_name, last_name, team, status, first_tap_today, last_tap_today"
