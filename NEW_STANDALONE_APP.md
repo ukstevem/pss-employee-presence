@@ -88,6 +88,55 @@ pss-<appname>/
 
 ---
 
+## Next.js production-build gotchas (caught the hard way)
+
+These don't show up under `npm run dev` but break `next build`
+inside `./build.sh`. Bake them in from day one:
+
+- **`useSearchParams()` requires a `<Suspense>` boundary.** Any
+  `"use client"` page that calls `useSearchParams()` must export a
+  thin wrapper like:
+  ```tsx
+  export default function Page() {
+    return (
+      <Suspense fallback={<Spinner />}>
+        <PageInner />
+      </Suspense>
+    );
+  }
+  function PageInner() { /* useSearchParams() etc. */ }
+  ```
+  The dev server tolerates its absence; production prerender errors
+  with `useSearchParams() should be wrapped in a suspense boundary`.
+
+- **Server-only env-var checks must be lazy.** A module-level
+  `if (!process.env.SUPABASE_SECRET_KEY) throw …` will fire at
+  build time when Next collects API-route page data — long before
+  runtime env is available. Defer the check to a getter:
+  ```ts
+  let _client: SupabaseClient | null = null;
+  export function getSupabaseAdmin() {
+    if (_client) return _client;
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_SECRET_KEY;
+    if (!url || !key) throw new Error("missing supabase admin env");
+    _client = createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    return _client;
+  }
+  ```
+  Callers use `getSupabaseAdmin()` inside route handlers, never at
+  module top-level.
+
+- **`NEXT_PUBLIC_*` are baked at build time, not read at runtime.**
+  Build-time values come from whatever env was loaded when
+  `./build.sh` ran (`set -a; source ../platform-portal/.env`).
+  Setting them in Portainer's stack-env is harmless and helps any
+  *server-side* code that re-reads them, but doesn't change what
+  the *browser* sees. If a `NEXT_PUBLIC_*` var changes, you must
+  rebuild + redeploy the image, not just restart the container.
+
 ## File templates — copy and substitute
 
 Replace `<appname>`, `<NNNN>` (port), and `<git-repo-url>` throughout.
@@ -215,16 +264,31 @@ Dockerfile
 > **Why this is mandatory:** Local `npm install` on Windows creates symlinks in `node_modules` for `file:` deps (`@platform/ui` etc.) that point to host paths. Without `.dockerignore`, `COPY . .` in the builder stage overlays those broken symlinks onto the container's clean `node_modules` and the build fails with `Module not found: Can't resolve '@platform/ui'`.
 
 ### `docker-compose.app.yml`
+
+Portainer-friendly: every runtime var comes from the **stack
+environment-variables UI** (or shell `export` for local `docker
+compose`). Avoids the relative `env_file:` / sibling-repo trap that
+breaks Portainer git-deploys, and avoids `external: platform_net`
+which requires a one-time `docker network create` per Pi that
+nobody remembers. The gateway proxies via host IP + port (e.g.
+`http://10.0.0.75:<NNNN>`), so cross-container DNS isn't required.
+
 ```yaml
 services:
   <appname>:
     image: ghcr.io/ukstevem/pss-<appname>:${IMAGE_TAG:-latest}
     container_name: <appname>
     restart: unless-stopped
-    env_file:
-      - ../platform-portal/.env       # canonical .env lives with the gateway
     environment:
-      - PORT=<NNNN>
+      PORT: <NNNN>
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY}
+      # Add any app-specific vars here; mirror them in the build
+      # args section of build.sh too if they're NEXT_PUBLIC_* (those
+      # are also baked into the client bundle at build time).
     ports:
       - "<NNNN>:<NNNN>"
     healthcheck:
@@ -233,12 +297,14 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
-
-networks:
-  default:
-    name: platform_net
-    external: true
 ```
+
+> No `networks:` block — Portainer auto-creates a per-stack default
+> network and the gateway routes by host IP. If you later need
+> cross-container DNS (e.g. service-to-service traffic that doesn't
+> hairpin through the gateway), add `external: platform_net` *and*
+> ensure `docker network create platform_net` has been run on the
+> Pi once.
 
 ### `build.sh`
 ```bash
@@ -357,25 +423,45 @@ chmod +x build.sh
 ./build.sh                # ARM64 → ghcr.io, tagged :<sha> + :latest
 ```
 
-### Pi (first time)
+### Pi (recommended): Portainer Stack from Git
+
+In Portainer (`https://10.0.0.75:9443`) → **Stacks → Add stack**:
+
+1. **Name**: `<appname>`
+2. **Build method**: **Repository**
+3. **Repository URL**: `https://github.com/ukstevem/pss-<appname>`
+4. **Repository reference**: `refs/heads/main`
+5. **Compose path**: `docker-compose.app.yml`
+6. **Authentication**: off (public repo)
+7. **Automatic updates**: on, polling at 5min — every git push to
+   main triggers a redeploy. Or copy the webhook URL and call from
+   a GitHub Action.
+8. **Environment variables**: paste the 5 (or more) vars from
+   `platform-portal/.env` that the stack needs (see the
+   `environment:` block in the compose file above for the list).
+
+After Save, the stack pulls `:latest` from ghcr.io and starts.
+Subsequent `git push` + `./build.sh` rebuilds the image; Portainer's
+auto-update polls and redeploys without further action.
+
+### Pi (alternative): SSH + docker compose
+
 ```bash
 ssh pi@10.0.0.75
 sudo mkdir -p /opt/pss-<appname>
 sudo chown "$USER:$USER" /opt/pss-<appname>
 git clone <git-repo-url> /opt/pss-<appname>
 cd /opt/pss-<appname>
-docker network create platform_net || true
+# Set the 5+ runtime env vars in your shell first, e.g.:
+#   set -a && source /opt/platform-portal/.env && set +a
 docker compose -f docker-compose.app.yml pull
 docker compose -f docker-compose.app.yml up -d
 ```
 
-### Pi (subsequent updates)
-```bash
-cd /opt/pss-<appname>
-git pull
-docker compose -f docker-compose.app.yml pull
-docker compose -f docker-compose.app.yml up -d
-```
+### Subsequent updates
+
+- **Portainer**: nothing — auto-update polls and redeploys.
+- **SSH**: `cd /opt/pss-<appname> && git pull && docker compose -f docker-compose.app.yml pull && docker compose -f docker-compose.app.yml up -d`
 
 Gateway never needs to restart unless its nginx config changes.
 
