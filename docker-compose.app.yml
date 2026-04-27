@@ -29,8 +29,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
-
-networks:
-  default:
-    name: platform_net
-    external: true
