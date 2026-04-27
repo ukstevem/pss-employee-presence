@@ -105,11 +105,17 @@ language sql stable security definer as $$
       work_date,
       count(*)::int as tap_count,
       min(ts)       as first_tap,
-      max(ts)       as last_tap,
-      -- actor of the chronologically-first / last tap, so the page can
-      -- show an "M" telltale next to manually-entered ones (actor='admin')
-      (array_agg(actor order by ts asc))[1]  as first_tap_actor,
-      (array_agg(actor order by ts desc))[1] as last_tap_actor
+      -- last_tap = the latest "out" tap (even index in the day's order).
+      -- For a single-tap day: no even-indexed tap → null, so no spurious
+      -- early-finish gets calculated against the orphan in-tap.
+      -- For in-out-in (odd >1): the index-2 out is still a real
+      -- last-out, so we surface it.
+      max(case when tap_idx % 2 = 0 then ts end) as last_tap,
+      -- Actor of the first tap and of the last "out" tap (same parity
+      -- rule), so the page can show the M telltale on manually-entered
+      -- corrections.
+      (array_agg(actor order by ts asc))[1] as first_tap_actor,
+      (array_agg(actor order by tap_idx desc) filter (where tap_idx % 2 = 0))[1] as last_tap_actor
     from ordered_taps
     group by employee_id, work_date
   ),
