@@ -168,6 +168,7 @@ export default function HoursPage() {
     () => searchParams.get("include_salaried") === "1"
   );
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [editing, setEditing] = useState<DailyHoursRow | null>(null);
   const [rows, setRows] = useState<DailyHoursRow[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -528,7 +529,8 @@ export default function HoursPage() {
                                 <th className="text-left py-1 pr-3 font-medium">First</th>
                                 <th className="text-left py-1 pr-3 font-medium">Last</th>
                                 <th className="text-right py-1 pr-3 font-medium">Hours</th>
-                                <th className="text-left py-1 font-medium">Flags</th>
+                                <th className="text-left py-1 pr-3 font-medium">Flags</th>
+                                <th className="text-right py-1 font-medium">Action</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -572,6 +574,16 @@ export default function HoursPage() {
                                           )}
                                       </div>
                                     </td>
+                                    <td className="py-1 text-right">
+                                      {r.is_working_day && (
+                                        <button
+                                          onClick={() => setEditing(r)}
+                                          className="px-2 py-0.5 text-[0.65rem] uppercase tracking-wide rounded border border-gray-300 text-gray-600 hover:bg-gray-100 hover:border-gray-400"
+                                        >
+                                          Edit
+                                        </button>
+                                      )}
+                                    </td>
                                   </tr>
                                 );
                               })}
@@ -587,6 +599,282 @@ export default function HoursPage() {
           </table>
         </div>
       )}
+
+      {editing && (
+        <EditDayModal
+          day={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            void refresh();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+type DayTap = {
+  id: string;
+  ts: string;
+  actor: string | null;
+  ignored: boolean;
+  raw_payload: Record<string, unknown> | null;
+};
+
+function EditDayModal({
+  day,
+  onClose,
+  onSaved,
+}: {
+  day: DailyHoursRow;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [taps, setTaps] = useState<DayTap[] | null>(null);
+  // Set of tap_ids the manager has toggled (ignored if currently
+  // un-ignored, and vice versa). We compare against original on save.
+  const [toggled, setToggled] = useState<Set<string>>(new Set());
+  const [inTime, setInTime] = useState("");
+  const [outTime, setOutTime] = useState("");
+  const [reason, setReason] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase.rpc("get_day_taps", {
+        p_employee_id: day.employee_id,
+        p_work_date: day.work_date,
+      });
+      if (cancelled) return;
+      if (error) {
+        setError(error.message);
+      } else {
+        setTaps((data ?? []) as DayTap[]);
+      }
+      setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [day.employee_id, day.work_date]);
+
+  function toggleIgnore(tapId: string) {
+    setToggled((prev) => {
+      const next = new Set(prev);
+      if (next.has(tapId)) next.delete(tapId);
+      else next.add(tapId);
+      return next;
+    });
+  }
+
+  function isIgnoredAfter(t: DayTap): boolean {
+    return toggled.has(t.id) ? !t.ignored : t.ignored;
+  }
+
+  function formatTapTime(ts: string): string {
+    return new Date(ts).toLocaleTimeString("en-GB", {
+      timeZone: SHIFT_TIMEZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  function applyStandardHours() {
+    setInTime(day.scheduled_day_start.slice(0, 5));
+    setOutTime(day.scheduled_day_finish.slice(0, 5));
+  }
+
+  async function handleSave() {
+    if (inTime && outTime && inTime >= outTime) {
+      setError("Out time must be after in time");
+      return;
+    }
+    const ignoreIds: string[] = [];
+    const unignoreIds: string[] = [];
+    for (const t of taps ?? []) {
+      if (!toggled.has(t.id)) continue;
+      if (t.ignored) unignoreIds.push(t.id);
+      else ignoreIds.push(t.id);
+    }
+    if (
+      ignoreIds.length === 0 &&
+      unignoreIds.length === 0 &&
+      !inTime &&
+      !outTime
+    ) {
+      setError("Nothing to save");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    const { error: rpcError } = await supabase.rpc("apply_day_corrections", {
+      p_employee_id: day.employee_id,
+      p_work_date: day.work_date,
+      p_ignore_tap_ids: ignoreIds.length ? ignoreIds : null,
+      p_unignore_tap_ids: unignoreIds.length ? unignoreIds : null,
+      p_in_time: inTime || null,
+      p_out_time: outTime || null,
+      p_reason: reason.trim() || null,
+    });
+    setSaving(false);
+    if (rpcError) {
+      setError(rpcError.message);
+      return;
+    }
+    onSaved();
+  }
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-lg shadow-xl max-w-lg w-full p-6 space-y-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div>
+          <h3 className="text-lg font-semibold text-gray-800">Edit taps</h3>
+          <p className="text-sm text-gray-600 mt-1">
+            {day.full_name} — {formatDateLabel(day.work_date)}
+          </p>
+          <p className="text-xs text-gray-400 mt-1">
+            Schedule: {day.scheduled_day_start.slice(0, 5)} – {day.scheduled_day_finish.slice(0, 5)}
+          </p>
+        </div>
+
+        <div>
+          <label className="text-xs uppercase tracking-wide text-gray-500 block mb-2">
+            Existing taps
+          </label>
+          {loading ? (
+            <p className="text-sm text-gray-500">Loading…</p>
+          ) : (taps ?? []).length === 0 ? (
+            <p className="text-sm text-gray-500 italic">
+              No taps recorded for this day.
+            </p>
+          ) : (
+            <ul className="space-y-1 border border-gray-100 rounded">
+              {(taps ?? []).map((t) => {
+                const ignoredNow = isIgnoredAfter(t);
+                const isAdmin = t.actor === "admin";
+                return (
+                  <li
+                    key={t.id}
+                    className={`flex items-center gap-3 px-3 py-2 text-sm border-b last:border-b-0 border-gray-50 ${
+                      ignoredNow ? "bg-gray-50 text-gray-400 line-through" : "bg-white text-gray-800"
+                    }`}
+                  >
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={ignoredNow}
+                        onChange={() => toggleIgnore(t.id)}
+                      />
+                      <span className="text-[0.65rem] uppercase tracking-wide text-gray-500 select-none">
+                        Ignore
+                      </span>
+                    </label>
+                    <span className="font-mono w-14">{formatTapTime(t.ts)}</span>
+                    {isAdmin && (
+                      <span
+                        title="Manually entered by an admin"
+                        className="text-[0.55rem] font-bold uppercase tracking-wide text-amber-700 bg-amber-100 border border-amber-200 rounded px-1 leading-none py-px"
+                      >
+                        M
+                      </span>
+                    )}
+                    {t.actor && t.actor !== "admin" && (
+                      <span className="text-[0.55rem] uppercase tracking-wide text-gray-400">
+                        {t.actor}
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        <div className="border-t border-gray-100 pt-4">
+          <div className="flex items-baseline justify-between mb-2">
+            <label className="text-xs uppercase tracking-wide text-gray-500">
+              Add a new pair (optional)
+            </label>
+            <button
+              type="button"
+              onClick={applyStandardHours}
+              className="text-[0.65rem] uppercase tracking-wide text-blue-600 hover:underline"
+            >
+              Apply standard hours
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[0.65rem] uppercase text-gray-500 block">
+                In
+              </label>
+              <input
+                type="time"
+                value={inTime}
+                onChange={(e) => setInTime(e.target.value)}
+                className="w-full mt-1 border rounded px-3 py-1.5 text-sm"
+              />
+            </div>
+            <div>
+              <label className="text-[0.65rem] uppercase text-gray-500 block">
+                Out
+              </label>
+              <input
+                type="time"
+                value={outTime}
+                onChange={(e) => setOutTime(e.target.value)}
+                className="w-full mt-1 border rounded px-3 py-1.5 text-sm"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label className="text-xs uppercase tracking-wide text-gray-500">
+            Reason (optional)
+          </label>
+          <input
+            type="text"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. Tapped wrong reader, real start was 06:00"
+            className="w-full mt-1 border rounded px-3 py-1.5 text-sm"
+          />
+        </div>
+
+        {error && (
+          <div className="p-2 text-sm bg-red-50 text-red-700 border border-red-200 rounded">
+            {error}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
+          <button
+            onClick={handleSave}
+            disabled={saving || loading}
+            className="px-4 py-1.5 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="px-4 py-1.5 text-sm rounded border hover:bg-gray-50"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

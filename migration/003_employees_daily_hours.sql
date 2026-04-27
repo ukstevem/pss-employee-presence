@@ -91,6 +91,7 @@ language sql stable security definer as $$
       on tc.card_id = e.card_id
      and tc.active   = true
     where (e.ts at time zone p_timezone)::date between p_start_date and p_end_date
+      and e.ignored = false
   ),
   pairs as (
     select
