@@ -23,22 +23,24 @@ create function employees_daily_hours(
   p_shift_end   time default '17:00'
 )
 returns table (
-  employee_id          uuid,
-  full_name            text,
-  team                 text,
-  pay_type             text,
-  work_date            date,
-  is_working_day       boolean,
-  tap_count            int,
-  first_tap            timestamptz,
-  last_tap             timestamptz,
-  first_tap_actor      text,
-  last_tap_actor       text,
-  worked_minutes       int,
-  missed_clock_in      boolean,
-  missed_clock_out     boolean,
-  late_minutes         int,
-  early_finish_minutes int
+  employee_id            uuid,
+  full_name              text,
+  team                   text,
+  pay_type               text,
+  work_date              date,
+  is_working_day         boolean,
+  scheduled_day_start    time,
+  scheduled_day_finish   time,
+  tap_count              int,
+  first_tap              timestamptz,
+  last_tap               timestamptz,
+  first_tap_actor        text,
+  last_tap_actor         text,
+  worked_minutes         int,
+  missed_clock_in        boolean,
+  missed_clock_out       boolean,
+  late_minutes           int,
+  early_finish_minutes   int
 )
 language sql stable security definer as $$
   with date_range as (
@@ -164,14 +166,28 @@ language sql stable security definer as $$
     sr.pay_type,
     sr.work_date,
     sr.is_working_day,
+    sr.day_start                          as scheduled_day_start,
+    sr.day_finish                         as scheduled_day_finish,
     coalesce(d.tap_count, 0)              as tap_count,
     d.first_tap,
     d.last_tap,
     d.first_tap_actor,
     d.last_tap_actor,
     coalesce(w.worked_minutes, 0)         as worked_minutes,
-    (d.tap_count is null)                 as missed_clock_in,
-    (d.tap_count is not null and d.tap_count % 2 = 1) as missed_clock_out,
+    -- "missed" means the boundary has passed and the tap is still
+    -- absent. Today's report doesn't flag taps as missed before the
+    -- shift's scheduled in/out time has actually elapsed.
+    (
+      sr.is_working_day
+      and d.tap_count is null
+      and ((sr.work_date + sr.day_start)::timestamp at time zone p_timezone) < now()
+    )                                     as missed_clock_in,
+    (
+      sr.is_working_day
+      and d.tap_count is not null
+      and d.tap_count % 2 = 1
+      and ((sr.work_date + sr.day_finish)::timestamp at time zone p_timezone) < now()
+    )                                     as missed_clock_out,
     case when d.first_tap is not null then
       (extract(epoch from (
         d.first_tap - ((sr.work_date + sr.day_start)::timestamp at time zone p_timezone)

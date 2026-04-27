@@ -14,6 +14,8 @@ type DailyHoursRow = {
   pay_type: "hourly" | "salaried";
   work_date: string; // 'YYYY-MM-DD'
   is_working_day: boolean;
+  scheduled_day_start: string;  // 'HH:MM:SS' from Postgres time type
+  scheduled_day_finish: string;
   tap_count: number;
   first_tap: string | null;
   last_tap: string | null;
