@@ -4,9 +4,16 @@
 #define WIFI_SSID      "your-ssid"
 #define WIFI_PASSWORD  "your-password"
 
-// Roll-call API endpoint (full URL incl. basePath). LAN only — no auth.
 // NOTE trailing slash — Next.js `trailingSlash: true` issues a 308 without it.
-#define ROLL_CALL_URL  "http://10.0.0.75:3000/employee-presence/api/roll-call/"
+#define ROLL_CALL_URL       "http://10.0.0.75:3000/employee-presence/api/roll-call/"
+#define INCIDENTS_POST_URL  "http://10.0.0.75:3000/employee-presence/api/roll-call/incidents/"
 
-// Auto-refresh snapshot every N minutes. 0 = manual only (BtnA).
-#define AUTO_REFRESH_MIN  0
+// Identifier recorded against every incident row this device posts.
+// Hand-assign per physical unit (e.g. "papers3-muster-bay-1").
+#define DEVICE_ID  "papers3-roll-call-1"
+
+// Auto-refresh interval while IDLE. 0 = manual only.
+#define AUTO_REFRESH_MIN  5
+
+// NTP server (uses UDP/123). pool.ntp.org works on most LANs.
+#define NTP_SERVER  "pool.ntp.org"
