@@ -122,7 +122,10 @@ void loop() {
   // Side button — context-aware
   if (M5.BtnA.wasPressed()) {
     if (g_mode == Mode::INCIDENT) {
-      // Close + POST incident
+      // Close + POST incident. Only wipe local state if the POST succeeded —
+      // a fire that takes the AP down must not also erase the marshal's
+      // accounted-for list. Failed POST leaves ticks intact so the marshal
+      // can retry (or read off the screen onto paper if all else fails).
       M5.Display.fillRect(0, SCREEN_H - FOOTER_H, SCREEN_W, FOOTER_H, TFT_WHITE);
       M5.Display.setCursor(20, SCREEN_H - FOOTER_H + 25);
       M5.Display.setTextSize(2);
@@ -130,12 +133,20 @@ void loop() {
       M5.Display.print("Closing incident...");
       bool ok = postIncident();
       Serial.printf("incident close: %s\n", ok ? "ok" : "FAIL");
-      closeIncident();
+      if (ok) {
+        closeIncident();
+        g_status = fetchSnapshot() ? "snapshot ok" : "fetch failed";
+        g_page = 0;
+      } else {
+        g_status = "post failed — retry BtnA";
+      }
+      renderAll();
+    } else {
+      // IDLE: just re-snapshot manually.
+      g_status = fetchSnapshot() ? "snapshot ok" : "fetch failed";
+      g_page = 0;
+      renderAll();
     }
-    // Always re-snapshot (whether we were IDLE or just closed an incident).
-    g_status = fetchSnapshot() ? "snapshot ok" : "fetch failed";
-    g_page = 0;
-    renderAll();
   }
 
   if (M5.Touch.getCount() > 0) {
