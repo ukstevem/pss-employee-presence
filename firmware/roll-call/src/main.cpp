@@ -55,6 +55,13 @@ static constexpr int ROWS_PER_PAGE = (SCREEN_H - HEADER_H - FOOTER_H) / ROW_H;
 static constexpr int TICK_BOX = 44;
 static constexpr int TICK_MARGIN = 16;
 
+// Action button (top-right of header). PaperS3 has no physical A button so
+// this is the only way to close an incident or force a manual refresh.
+static constexpr int BTN_W = 220;
+static constexpr int BTN_H = 70;
+static constexpr int BTN_X = SCREEN_W - BTN_W - 10;
+static constexpr int BTN_Y = 15;
+
 // Page index space:
 //   [0 .. inPages-1]                       → IN list (tappable = accounted)
 //   [inPages .. inPages + notInPages - 1]  → NOT-IN list (tappable = exception)
@@ -119,35 +126,9 @@ void setup() {
 void loop() {
   M5.update();
 
-  // Side button — context-aware
-  if (M5.BtnA.wasPressed()) {
-    if (g_mode == Mode::INCIDENT) {
-      // Close + POST incident. Only wipe local state if the POST succeeded —
-      // a fire that takes the AP down must not also erase the marshal's
-      // accounted-for list. Failed POST leaves ticks intact so the marshal
-      // can retry (or read off the screen onto paper if all else fails).
-      M5.Display.fillRect(0, SCREEN_H - FOOTER_H, SCREEN_W, FOOTER_H, TFT_WHITE);
-      M5.Display.setCursor(20, SCREEN_H - FOOTER_H + 25);
-      M5.Display.setTextSize(2);
-      M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-      M5.Display.print("Closing incident...");
-      bool ok = postIncident();
-      Serial.printf("incident close: %s\n", ok ? "ok" : "FAIL");
-      if (ok) {
-        closeIncident();
-        g_status = fetchSnapshot() ? "snapshot ok" : "fetch failed";
-        g_page = 0;
-      } else {
-        g_status = "post failed — retry BtnA";
-      }
-      renderAll();
-    } else {
-      // IDLE: just re-snapshot manually.
-      g_status = fetchSnapshot() ? "snapshot ok" : "fetch failed";
-      g_page = 0;
-      renderAll();
-    }
-  }
+  // Physical button fallback (PaperS3 has no A button on most units; harmless
+  // when unmapped). Same behaviour as tapping the on-screen action button.
+  if (M5.BtnA.wasPressed()) doActionButton();
 
   if (M5.Touch.getCount() > 0) {
     auto t = M5.Touch.getDetail();
@@ -354,22 +335,34 @@ static void renderHeader() {
   M5.Display.fillRect(0, 0, SCREEN_W, HEADER_H, TFT_WHITE);
   M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
 
-  // Title + mode badge
+  // Title
   M5.Display.setTextSize(4);
   M5.Display.setCursor(20, 15);
   M5.Display.print("Roll Call");
 
-  M5.Display.setTextSize(2);
+  // Action button (top-right): "Refresh" when idle, inverted "CLOSE
+  // INCIDENT" when an incident is active.
   if (g_mode == Mode::INCIDENT) {
-    M5.Display.setCursor(SCREEN_W - 180, 25);
-    M5.Display.fillRect(SCREEN_W - 190, 18, 175, 36, TFT_BLACK);
+    M5.Display.fillRect(BTN_X, BTN_Y, BTN_W, BTN_H, TFT_BLACK);
     M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-    M5.Display.print(" INCIDENT ACTIVE");
-    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.setTextSize(3);
+    M5.Display.setCursor(BTN_X + 18, BTN_Y + 22);
+    M5.Display.print("CLOSE");
+    M5.Display.setTextSize(2);
+    M5.Display.setCursor(BTN_X + 18, BTN_Y + 50);
+    M5.Display.print("INCIDENT");
   } else {
-    M5.Display.setCursor(SCREEN_W - 140, 25);
+    M5.Display.drawRect(BTN_X, BTN_Y, BTN_W, BTN_H, TFT_BLACK);
+    M5.Display.drawRect(BTN_X + 1, BTN_Y + 1, BTN_W - 2, BTN_H - 2, TFT_BLACK);
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.setTextSize(3);
+    M5.Display.setCursor(BTN_X + 30, BTN_Y + 22);
+    M5.Display.print("REFRESH");
+    M5.Display.setTextSize(2);
+    M5.Display.setCursor(BTN_X + 18, BTN_Y + 50);
     M5.Display.print("idle / live");
   }
+  M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
 
   // Last refreshed
   M5.Display.setCursor(20, 70);
@@ -506,7 +499,40 @@ static void renderAll() {
 // Input
 // =============================================================
 
+static void doActionButton() {
+  if (g_mode == Mode::INCIDENT) {
+    // Close + POST. Preserve state on failure so a downed AP doesn't
+    // erase the marshal's ticks.
+    M5.Display.fillRect(0, SCREEN_H - FOOTER_H, SCREEN_W, FOOTER_H, TFT_WHITE);
+    M5.Display.setCursor(20, SCREEN_H - FOOTER_H + 25);
+    M5.Display.setTextSize(2);
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.print("Closing incident...");
+    bool ok = postIncident();
+    Serial.printf("incident close: %s\n", ok ? "ok" : "FAIL");
+    if (ok) {
+      closeIncident();
+      g_status = fetchSnapshot() ? "snapshot ok" : "fetch failed";
+      g_page = 0;
+    } else {
+      g_status = "post failed - retry";
+    }
+    renderAll();
+  } else {
+    g_status = fetchSnapshot() ? "snapshot ok" : "fetch failed";
+    g_page = 0;
+    renderAll();
+  }
+}
+
 static void handleTouch(int x, int y) {
+  // Action button (top-right header)
+  if (x >= BTN_X && x <= BTN_X + BTN_W &&
+      y >= BTN_Y && y <= BTN_Y + BTN_H) {
+    doActionButton();
+    return;
+  }
+
   // Footer: prev / next
   if (y >= SCREEN_H - FOOTER_H + 10 && y <= SCREEN_H - 10) {
     if (x >= 10 && x <= 150) {
