@@ -18,6 +18,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 #include <time.h>
 #include <vector>
 #include "config.h"
@@ -44,6 +45,8 @@ static uint32_t g_lastFetchMs = 0;
 static time_t  g_lastFetchEpoch = 0;
 static Mode    g_mode = Mode::PRESENCE;
 static time_t  g_incidentStartEpoch = 0;
+static bool    g_usingCache = false;   // true when snapshot came from NVS, not network
+static Preferences g_prefs;             // NVS namespace "rollcall"
 
 // Layout
 static constexpr int SCREEN_W = 540;
@@ -103,6 +106,14 @@ static String isoUtc(time_t t);
 static String fmtUtc(time_t t);
 static String relativeAgo(time_t t);
 
+// NVS persistence
+static void cacheSnapshotBody(const String& body);
+static bool loadCachedSnapshot();
+static void saveIncidentState();
+static void clearIncidentState();
+static bool restoreIncidentState();
+static void parseSnapshotJson(const String& body);
+
 // =============================================================
 // setup / loop
 // =============================================================
@@ -115,6 +126,8 @@ void setup() {
   Serial.println();
   Serial.println("=== roll-call boot ===");
   Serial.printf("device:%s url:%s\n", DEVICE_ID, ROLL_CALL_URL);
+
+  g_prefs.begin("rollcall", false);   // R/W. Survives reset, wiped on flash erase.
 
   M5.Display.setRotation(0);
   // Use full-refresh (quality) mode — earlier epd_text mode rendered thin
@@ -131,13 +144,32 @@ void setup() {
   connectWifi();
   syncTime();
 
-  g_status = fetchSnapshot() ? "snapshot ok" : "fetch failed";
-  Serial.printf("status: %s, http: %d, in: %d, notIn: %d\n",
+  // Try live fetch. On failure fall back to cache so a downed AP/server
+  // doesn't leave the marshal with a blank list.
+  if (fetchSnapshot()) {
+    g_status = "snapshot ok";
+    g_usingCache = false;
+  } else if (loadCachedSnapshot()) {
+    g_status = "OFFLINE - cached snapshot";
+    g_usingCache = true;
+    Serial.println("boot: using cached snapshot");
+  } else {
+    g_status = "fetch failed, no cache";
+    g_usingCache = false;
+  }
+  Serial.printf("status: %s, http: %d, in: %d, notIn: %d, cache=%d\n",
                 g_status.c_str(), g_lastHttpCode,
-                (int)g_in.size(), (int)g_notIn.size());
+                (int)g_in.size(), (int)g_notIn.size(), g_usingCache ? 1 : 0);
 
   g_mode = Mode::PRESENCE;
   g_page = 0;
+
+  // Recover from a power-cycle that happened mid-incident.
+  if (restoreIncidentState()) {
+    Serial.println("boot: restored active incident from NVS");
+    g_status = String("incident restored - ") + g_status;
+  }
+
   renderAll();
 }
 
@@ -218,30 +250,22 @@ static bool fetchSnapshot() {
   }
 
   String body = http.getString();
-  JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, body);
   http.end();
-  if (err) {
-    Serial.printf("fetch: parse err: %s\n", err.c_str());
+
+  // Probe-parse before committing so a malformed payload doesn't blank
+  // out the in-memory roster we already had.
+  JsonDocument probe;
+  if (deserializeJson(probe, body)) {
+    Serial.println("fetch: parse err");
     return false;
   }
 
-  g_snapshotAtIso = String((const char*)doc["generated_at"]);
-  g_in.clear();
-  g_notIn.clear();
-  for (JsonObject e : doc["employees"].as<JsonArray>()) {
-    Person p;
-    p.id     = String((const char*)e["id"]);
-    p.name   = String((const char*)e["name"]);
-    p.team   = String((const char*)e["team"]);
-    p.status = String((const char*)e["status"]);
-    p.marked = false;
-    if (p.status == "in") g_in.push_back(p);
-    else                  g_notIn.push_back(p);
-  }
+  parseSnapshotJson(body);
   g_lastFetchMs    = millis();
   g_lastFetchEpoch = time(nullptr);
-  Serial.printf("fetch: in=%d notIn=%d\n", (int)g_in.size(), (int)g_notIn.size());
+  g_usingCache     = false;
+  cacheSnapshotBody(body);
+  Serial.printf("fetch: in=%d notIn=%d (cached)\n", (int)g_in.size(), (int)g_notIn.size());
   return true;
 }
 
@@ -307,6 +331,7 @@ static void enterPresence() {
   for (auto& p : g_in)    p.marked = false;
   for (auto& p : g_notIn) p.marked = false;
   g_page = 0;
+  clearIncidentState();
 }
 
 static void enterIncident() {
@@ -314,6 +339,7 @@ static void enterIncident() {
   g_incidentStartEpoch = time(nullptr);
   g_page = 0;
   Serial.printf("INCIDENT started epoch=%ld\n", (long)g_incidentStartEpoch);
+  saveIncidentState();   // mark active in NVS even before any tick
 }
 
 // =============================================================
@@ -386,7 +412,7 @@ static void renderHeader() {
     M5.Display.print("live / idle");
   }
 
-  // Last refresh
+  // Last refresh + cache state
   M5.Display.setCursor(20, 70);
   if (g_lastFetchEpoch == 0) {
     M5.Display.print("Last refresh: never");
@@ -394,6 +420,13 @@ static void renderHeader() {
     M5.Display.printf("Last refresh: %s  (%s)",
                       fmtUtc(g_lastFetchEpoch).c_str(),
                       relativeAgo(g_lastFetchEpoch).c_str());
+  }
+  if (g_usingCache) {
+    M5.Display.fillRect(20, 168, 240, 22, TFT_BLACK);
+    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    M5.Display.setCursor(26, 173);
+    M5.Display.print(" OFFLINE - cached data ");
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
   }
 
   // Counters
@@ -663,7 +696,8 @@ static void handleTouch(int x, int y) {
         int idxInList = sectionPage * ROWS_PER_PAGE + row;
         if (idxInList >= 0 && idxInList < (int)list.size()) {
           list[idxInList].marked = !list[idxInList].marked;
-          renderAll();   // full repaint — keeps counters/header in sync
+          saveIncidentState();           // every tick persists immediately
+          renderAll();
         }
       }
       break;
@@ -746,4 +780,124 @@ static String relativeAgo(time_t t) {
   if (secs < 3600) return String(secs / 60) + "m ago";
   if (secs < 86400) return String(secs / 3600) + "h ago";
   return String(secs / 86400) + "d ago";
+}
+
+// =============================================================
+// NVS persistence
+// =============================================================
+//
+// Two independent records under namespace "rollcall":
+//
+//   snapBody  (String)  — last successful /api/roll-call response body
+//   snapEpoch (uint32)  — epoch when that body was received
+//
+//   incOn     (bool)    — incident currently active
+//   incStart  (uint32)  — incident start epoch
+//   incMarks  (String)  — JSON {"in":[ids],"notIn":[ids]} of marked people.
+//                         IDs are preferred; names used as fallback if the
+//                         server hasn't been redeployed to include id.
+//
+// Snapshot cache survives reboot. Incident state restores ticks on boot
+// after a power-cycle mid-incident. Both clear on a clean PRESENCE return
+// (successful POST or, currently, no other path — by design the marshal
+// must close the incident explicitly).
+
+static void parseSnapshotJson(const String& body) {
+  JsonDocument doc;
+  if (deserializeJson(doc, body)) return;
+  g_snapshotAtIso = String((const char*)doc["generated_at"]);
+  g_in.clear();
+  g_notIn.clear();
+  for (JsonObject e : doc["employees"].as<JsonArray>()) {
+    Person p;
+    p.id     = String((const char*)e["id"]);
+    p.name   = String((const char*)e["name"]);
+    p.team   = String((const char*)e["team"]);
+    p.status = String((const char*)e["status"]);
+    p.marked = false;
+    if (p.status == "in") g_in.push_back(p);
+    else                  g_notIn.push_back(p);
+  }
+}
+
+static void cacheSnapshotBody(const String& body) {
+  size_t n = g_prefs.putString("snapBody", body);
+  g_prefs.putULong("snapEpoch", (unsigned long)time(nullptr));
+  Serial.printf("nvs: cached snapshot (%u bytes written)\n", (unsigned)n);
+}
+
+static bool loadCachedSnapshot() {
+  String body = g_prefs.getString("snapBody", "");
+  if (body.length() == 0) {
+    Serial.println("nvs: no cached snapshot");
+    return false;
+  }
+  unsigned long ts = g_prefs.getULong("snapEpoch", 0);
+  parseSnapshotJson(body);
+  g_lastFetchEpoch = (time_t)ts;
+  g_lastFetchMs    = millis();   // suppresses auto-refresh storm if WiFi still flaky
+  Serial.printf("nvs: loaded cache (%u bytes, %lu epoch)\n",
+                (unsigned)body.length(), ts);
+  return true;
+}
+
+static String markedIdsJson(const std::vector<Person>& list) {
+  JsonDocument doc;
+  JsonArray arr = doc.to<JsonArray>();
+  for (auto& p : list) {
+    if (!p.marked) continue;
+    arr.add(p.id.length() ? p.id : p.name);
+  }
+  String s;
+  serializeJson(arr, s);
+  return s;
+}
+
+static void saveIncidentState() {
+  if (g_mode != Mode::INCIDENT) return;
+  JsonDocument doc;
+  doc["in"]    = serialized(markedIdsJson(g_in));
+  doc["notIn"] = serialized(markedIdsJson(g_notIn));
+  String s;
+  serializeJson(doc, s);
+  g_prefs.putBool("incOn", true);
+  g_prefs.putULong("incStart", (unsigned long)g_incidentStartEpoch);
+  g_prefs.putString("incMarks", s);
+}
+
+static void clearIncidentState() {
+  g_prefs.putBool("incOn", false);
+  g_prefs.remove("incStart");
+  g_prefs.remove("incMarks");
+}
+
+static bool restoreIncidentState() {
+  if (!g_prefs.getBool("incOn", false)) return false;
+  if (g_in.empty() && g_notIn.empty()) {
+    Serial.println("nvs: incident flag set but no roster — skipping restore");
+    return false;
+  }
+
+  g_incidentStartEpoch = (time_t)g_prefs.getULong("incStart", 0);
+  String s = g_prefs.getString("incMarks", "");
+  if (s.length() == 0) return false;
+
+  JsonDocument doc;
+  if (deserializeJson(doc, s)) return false;
+
+  auto applyMarks = [&](const char* key, std::vector<Person>& list) {
+    for (JsonVariant v : doc[key].as<JsonArray>()) {
+      String token = String((const char*)v);
+      for (auto& p : list) {
+        if ((p.id.length() && p.id == token) || p.name == token) {
+          p.marked = true;
+          break;
+        }
+      }
+    }
+  };
+  applyMarks("in",    g_in);
+  applyMarks("notIn", g_notIn);
+  g_mode = Mode::INCIDENT;
+  return true;
 }
