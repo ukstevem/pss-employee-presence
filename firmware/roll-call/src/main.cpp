@@ -23,6 +23,9 @@ struct Person {
 static std::vector<Person> g_people;
 static String g_snapshotAt;          // ISO from server
 static String g_status = "boot";     // last status line
+static String g_wifiInfo = "wifi: ?";
+static int g_lastHttpCode = 0;
+static int g_totalEmployees = 0;     // before status=="in" filter
 static int g_page = 0;
 static uint32_t g_lastFetchMs = 0;
 
@@ -47,6 +50,12 @@ static int  accountedCount();
 void setup() {
   auto cfg = M5.config();
   M5.begin(cfg);
+  Serial.begin(115200);
+  delay(500);
+  Serial.println();
+  Serial.println("=== roll-call boot ===");
+  Serial.printf("URL: %s\n", ROLL_CALL_URL);
+
   M5.Display.setRotation(0);          // portrait, USB-C at bottom
   M5.Display.setEpdMode(epd_mode_t::epd_text);
   M5.Display.fillScreen(TFT_WHITE);
@@ -65,6 +74,9 @@ void setup() {
   } else {
     g_status = "fetch failed";
   }
+  Serial.printf("status: %s, http: %d, total: %d, in: %d\n",
+                g_status.c_str(), g_lastHttpCode,
+                g_totalEmployees, (int)g_people.size());
   g_page = 0;
   renderAll();
 }
@@ -107,35 +119,73 @@ void loop() {
 static void connectWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.printf("WiFi: connecting to '%s'...\n", WIFI_SSID);
   uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 30000) {
     delay(250);
+    Serial.print(".");
+  }
+  Serial.println();
+  if (WiFi.status() == WL_CONNECTED) {
+    IPAddress ip = WiFi.localIP();
+    g_wifiInfo = String("wifi ok ") + ip.toString() + " rssi:" + String(WiFi.RSSI());
+    Serial.printf("WiFi OK ip=%s rssi=%d\n", ip.toString().c_str(), WiFi.RSSI());
+  } else {
+    g_wifiInfo = String("wifi FAIL status=") + String((int)WiFi.status());
+    Serial.printf("WiFi FAIL status=%d\n", (int)WiFi.status());
   }
 }
 
 static bool fetchSnapshot() {
   if (WiFi.status() != WL_CONNECTED) connectWifi();
-  if (WiFi.status() != WL_CONNECTED) return false;
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("fetch: WiFi not connected");
+    return false;
+  }
 
   HTTPClient http;
   http.setTimeout(10000);
-  if (!http.begin(ROLL_CALL_URL)) return false;
+  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);  // Next trailingSlash 308s
+  Serial.printf("fetch: GET %s\n", ROLL_CALL_URL);
+  if (!http.begin(ROLL_CALL_URL)) {
+    Serial.println("fetch: http.begin failed");
+    g_lastHttpCode = -1;
+    return false;
+  }
+  http.addHeader("Accept", "application/json");
+  http.addHeader("Accept-Encoding", "identity");  // refuse gzip — ArduinoJson can't decompress
   int code = http.GET();
+  g_lastHttpCode = code;
+  Serial.printf("fetch: http %d (content-length=%d)\n", code, http.getSize());
   if (code != 200) {
+    String body = http.getString();
+    Serial.printf("fetch: body=%s\n", body.c_str());
     http.end();
     return false;
   }
 
-  // Stream-parse to keep PSRAM use low.
+  // Dump full body to serial for diagnosis, then parse from the string
+  // (no stream re-read available after getString()).
+  String body = http.getString();
+  Serial.printf("fetch: body[%d]=%s\n", body.length(), body.c_str());
+
   JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, http.getStream());
+  DeserializationError err = deserializeJson(doc, body);
   http.end();
-  if (err) return false;
+  if (err) {
+    Serial.printf("fetch: json parse err: %s\n", err.c_str());
+    return false;
+  }
 
   g_snapshotAt = doc["generated_at"].as<const char*>();
   g_people.clear();
-  for (JsonObject e : doc["employees"].as<JsonArray>()) {
+  JsonArray emps = doc["employees"].as<JsonArray>();
+  g_totalEmployees = emps.size();
+  Serial.printf("fetch: %d employees in payload\n", g_totalEmployees);
+  for (JsonObject e : emps) {
     const char* status = e["status"];
+    const char* name   = e["name"];
+    Serial.printf("  - %s : %s\n", name ? name : "(null)", status ? status : "(null)");
     if (!status || strcmp(status, "in") != 0) continue;   // marshal only cares about IN
     Person p;
     p.id     = e["id"].as<const char*>();
@@ -144,6 +194,7 @@ static bool fetchSnapshot() {
     p.ticked = false;
     g_people.push_back(p);
   }
+  Serial.printf("fetch: %d filtered as IN\n", (int)g_people.size());
   g_lastFetchMs = millis();
   return true;
 }
@@ -168,8 +219,12 @@ static void renderHeader() {
   M5.Display.print("Roll Call");
 
   M5.Display.setTextSize(2);
-  M5.Display.setCursor(20, 80);
-  M5.Display.printf("Snapshot: %s", g_snapshotAt.c_str());
+  M5.Display.setCursor(20, 70);
+  M5.Display.printf("%s", g_wifiInfo.c_str());
+  M5.Display.setCursor(20, 92);
+  M5.Display.printf("http:%d  payload:%d  in:%d  %s",
+                    g_lastHttpCode, g_totalEmployees,
+                    (int)g_people.size(), g_status.c_str());
 
   int expected   = (int)g_people.size();
   int accounted  = accountedCount();
@@ -242,7 +297,15 @@ static void renderAll() {
     M5.Display.setTextSize(3);
     M5.Display.setCursor(40, HEADER_H + 60);
     M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-    M5.Display.print("Nobody currently in.");
+    if (g_lastHttpCode == 200 && g_totalEmployees > 0) {
+      M5.Display.print("Nobody currently in.");
+    } else if (g_lastHttpCode == 200) {
+      M5.Display.print("API returned 0 employees.");
+    } else if (g_lastHttpCode > 0) {
+      M5.Display.printf("HTTP %d", g_lastHttpCode);
+    } else {
+      M5.Display.print("Fetch failed (see serial).");
+    }
   } else {
     int start = g_page * ROWS_PER_PAGE;
     int end   = std::min((int)g_people.size(), start + ROWS_PER_PAGE);

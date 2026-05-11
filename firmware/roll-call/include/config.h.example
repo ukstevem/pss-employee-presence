@@ -5,7 +5,8 @@
 #define WIFI_PASSWORD  "your-password"
 
 // Roll-call API endpoint (full URL incl. basePath). LAN only — no auth.
-#define ROLL_CALL_URL  "http://10.0.0.75:3000/employee-presence/api/roll-call"
+// NOTE trailing slash — Next.js `trailingSlash: true` issues a 308 without it.
+#define ROLL_CALL_URL  "http://10.0.0.75:3000/employee-presence/api/roll-call/"
 
 // Auto-refresh snapshot every N minutes. 0 = manual only (BtnA).
 #define AUTO_REFRESH_MIN  0
