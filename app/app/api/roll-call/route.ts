@@ -29,6 +29,7 @@ export async function GET() {
 
   const rows = (data ?? []) as WhosInRow[];
   const employees = rows.map((r) => ({
+    id: r.employee_id,
     name: r.full_name,
     team: r.team,
     status: r.status,

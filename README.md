@@ -33,6 +33,10 @@ docker compose -f docker-compose.app.yml pull
 docker compose -f docker-compose.app.yml up -d
 ```
 
+## M5 PaperS3 marshal device
+
+Battery-powered e-paper companion for the Roll Call page. See [`firmware/roll-call/README.md`](./firmware/roll-call/README.md) for build/flash/config.
+
 ## Task tracking
 
 This project uses [beads (`bd`)](https://github.com/) for task tracking.
