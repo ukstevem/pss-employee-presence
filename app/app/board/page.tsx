@@ -128,7 +128,7 @@ export default function BoardPage() {
           <img
             src="/employee-presence/pss-logo-reversed.png"
             alt="PSS"
-            className="h-9 w-auto"
+            className="h-28 w-auto"
           />
           <h1 className="text-2xl font-bold tracking-tight">Who&apos;s In</h1>
         </div>
