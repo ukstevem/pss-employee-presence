@@ -24,7 +24,7 @@ interface BoardResponse {
 }
 
 const API_URL = "/employee-presence/api/board";
-const REFRESH_MS = 30_000;
+const REFRESH_MS = 10_000;
 
 function formatTime(ts: string | null): string {
   if (!ts) return "—";
@@ -183,7 +183,7 @@ export default function BoardPage() {
             {lastRefresh.toLocaleTimeString("en-GB", {
               timeZone: "Europe/London",
             })}{" "}
-            · auto-refresh every 30s
+            · auto-refresh every 10s
           </span>
         ) : null}
       </footer>
