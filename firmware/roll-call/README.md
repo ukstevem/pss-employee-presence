@@ -16,20 +16,37 @@ marshal tap each name to mark "accounted for".
    ```bash
    cp include/config.h.example include/config.h
    ```
-3. Edit `include/config.h` — set `WIFI_SSID`, `WIFI_PASSWORD`, and `ROLL_CALL_URL` (the LAN URL of the employee-presence app, e.g. `http://10.0.0.75:3000/employee-presence/api/roll-call`).
+3. Edit `include/config.h`:
+   - `WIFI_SSID`, `WIFI_PASSWORD` — LAN credentials.
+   - `ROLL_CALL_URL`, `INCIDENTS_POST_URL` — LAN URLs of the employee-presence app (note the **trailing slash** — Next.js `trailingSlash: true` 308-redirects without it).
+   - `DEVICE_ID` — **unique per physical unit** (e.g. `papers3-roll-call-1`, `papers3-roll-call-2`). Recorded on every incident row so you can tell which marshal device logged a roll call.
+   - `AUTO_REFRESH_SEC` — PRESENCE-mode auto-refresh interval in **seconds** (0 = manual only). Lower = more live, but more full e-ink flashes and higher battery draw.
 
 `include/config.h` is gitignored — never commit credentials.
+
+## Fleet / flashing multiple units
+
+`config.h` holds **one device's identity at a time**. To flash another unit:
+change `DEVICE_ID` (and anything else that differs), then build with that unit
+plugged in. Current fleet: `papers3-roll-call-1`, `papers3-roll-call-2`.
 
 ## Build & flash
 
 Plug the PaperS3 in via USB-C, then:
 
 ```bash
-pio run -e m5papers3 -t upload
-pio device monitor       # optional, view serial logs
+pio run -e m5papers3 -t upload                 # auto-detects the port
+pio run -e m5papers3 -t upload --upload-port COM7   # or name the port explicitly
+pio device monitor -p COM7                     # optional, view serial logs
 ```
 
 If upload fails to enter download mode, hold the side **BOOT** button while pressing **RST**, then release RST.
+
+> **Build gotcha (Windows):** the espressif32 platform auto-upgrades under the
+> `^6.10.0` range and re-downloads the ~400 MB Xtensa toolchain. If the C: drive
+> is low on space the unpack fails (`WinError 112 / Errno 28`), leaving a corrupt
+> `~/.platformio/packages/toolchain-xtensa-esp32s3`. Fix: delete that folder,
+> `pio system prune -f`, free disk, and rebuild.
 
 ## Usage
 

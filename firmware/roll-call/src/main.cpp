@@ -2,7 +2,7 @@
 //
 // Four-screen UX with explicit confirmations:
 //
-//   PRESENCE       — default. Auto-refresh every AUTO_REFRESH_MIN.
+//   PRESENCE       — default. Auto-refresh every AUTO_REFRESH_SEC seconds.
 //                    Read-only roster (IN + NOT-IN). Big bottom button
 //                    "START ROLL CALL".
 //   CONFIRM_START  — modal. "Start roll call?". Cancel / Start.
@@ -182,8 +182,8 @@ void loop() {
   }
 
   // Auto-refresh only in PRESENCE
-  if (g_mode == Mode::PRESENCE && AUTO_REFRESH_MIN > 0 &&
-      millis() - g_lastFetchMs > (uint32_t)AUTO_REFRESH_MIN * 60UL * 1000UL) {
+  if (g_mode == Mode::PRESENCE && AUTO_REFRESH_SEC > 0 &&
+      millis() - g_lastFetchMs > (uint32_t)AUTO_REFRESH_SEC * 1000UL) {
     Serial.println("auto-refresh tick");
     if (fetchSnapshot()) renderAll();
   }

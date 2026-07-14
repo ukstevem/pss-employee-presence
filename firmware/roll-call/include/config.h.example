@@ -12,8 +12,9 @@
 // Hand-assign per physical unit (e.g. "papers3-muster-bay-1").
 #define DEVICE_ID  "papers3-roll-call-1"
 
-// Auto-refresh interval while IDLE. 0 = manual only.
-#define AUTO_REFRESH_MIN  5
+// Auto-refresh interval in SECONDS while IDLE. 0 = manual only.
+// Lower = more live data, but more full e-ink flashes and higher battery draw.
+#define AUTO_REFRESH_SEC  30
 
 // NTP server (uses UDP/123). pool.ntp.org works on most LANs.
 #define NTP_SERVER  "pool.ntp.org"
